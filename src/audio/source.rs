@@ -17,17 +17,20 @@ impl AudioSource {
             };
         }
 
-        if input.contains("watch?v=") {
-            if input.contains("&list=RD") || input.contains("&list=LL") || input.contains("&list=WL") || input.contains("&start_radio=") {
-                let cleaned = if let Some((base, _)) = input.split_once("&list=") {
-                    base.to_string()
-                } else if let Some((base, _)) = input.split_once("&start_radio=") {
-                    base.to_string()
-                } else {
-                    input.to_string()
-                };
-                return Self::Youtube { url: cleaned };
-            }
+        if input.contains("watch?v=")
+            && (input.contains("&list=RD")
+                || input.contains("&list=LL")
+                || input.contains("&list=WL")
+                || input.contains("&start_radio="))
+        {
+            let cleaned = if let Some((base, _)) = input.split_once("&list=") {
+                base.to_string()
+            } else if let Some((base, _)) = input.split_once("&start_radio=") {
+                base.to_string()
+            } else {
+                input.to_string()
+            };
+            return Self::Youtube { url: cleaned };
         }
 
         if input.contains("youtube.com/playlist") {

@@ -1,14 +1,19 @@
 use std::collections::VecDeque;
 use std::fmt::Write;
 
+use rand::seq::SliceRandom;
+
 use crate::audio::ytdl;
 use crate::error::BotError;
 use crate::queue::track::QueuedTrack;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, poise::ChoiceParameter)]
 pub enum LoopMode {
+    #[name = "Off"]
     Off,
+    #[name = "Track (Single)"]
     Track,
+    #[name = "Queue (Entire Queue)"]
     Queue,
 }
 
@@ -33,8 +38,10 @@ impl LoopMode {
 pub struct GuildQueue {
     pub tracks: VecDeque<QueuedTrack>,
     pub current: Option<QueuedTrack>,
+    pub history: VecDeque<QueuedTrack>,
     pub handle: Option<songbird::tracks::TrackHandle>,
     pub loop_mode: LoopMode,
+    pub volume: f32,
 }
 
 impl GuildQueue {
@@ -42,8 +49,10 @@ impl GuildQueue {
         Self {
             tracks: VecDeque::new(),
             current: None,
+            history: VecDeque::with_capacity(50),
             handle: None,
             loop_mode: LoopMode::Off,
+            volume: 1.0,
         }
     }
 
@@ -64,9 +73,32 @@ impl GuildQueue {
             .ok_or(BotError::InvalidIndex(index))
     }
 
+    pub fn shuffle(&mut self) {
+        let mut rng = rand::thread_rng();
+        self.tracks.make_contiguous().shuffle(&mut rng);
+    }
+
+    pub fn set_volume(&mut self, vol: f32) {
+        self.volume = vol.clamp(0.0, 2.0);
+        if let Some(handle) = &self.handle {
+            let _ = handle.set_volume(self.volume);
+        }
+    }
+
+    pub fn set_loop(&mut self, mode: LoopMode) {
+        self.loop_mode = mode;
+    }
+
     pub fn skip(&mut self) -> Option<QueuedTrack> {
         if let Some(handle) = self.handle.take() {
             let _ = handle.stop();
+        }
+
+        if let Some(prev) = &self.current {
+            if self.history.len() >= 50 {
+                self.history.pop_front();
+            }
+            self.history.push_back(prev.clone());
         }
 
         match self.loop_mode {
@@ -84,6 +116,21 @@ impl GuildQueue {
         }
     }
 
+    pub fn previous(&mut self) -> Option<QueuedTrack> {
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.stop();
+        }
+
+        if let Some(prev) = self.history.pop_back() {
+            if let Some(current) = self.current.take() {
+                self.tracks.push_front(current);
+            }
+            Some(prev)
+        } else {
+            None
+        }
+    }
+
     pub fn list_queue(&self, page: usize) -> String {
         let per_page = 10;
         let total = self.tracks.len();
@@ -92,7 +139,7 @@ impl GuildQueue {
             return "Queue is empty.".to_string();
         }
 
-        let total_pages = (total + per_page - 1) / per_page;
+        let total_pages = total.div_ceil(per_page);
         let page = page.clamp(1, total_pages);
         let start = (page - 1) * per_page;
         let end = (start + per_page).min(total);

@@ -86,6 +86,7 @@ pub async fn play_local(
 
             {
                 let mut queue = queue_lock.write().await;
+                let _ = handle.set_volume(queue.volume);
                 queue.handle = Some(handle);
             }
 
@@ -144,6 +145,7 @@ pub async fn play_local(
 
             {
                 let mut queue = queue_lock.write().await;
+                let _ = handle.set_volume(queue.volume);
                 queue.handle = Some(handle);
             }
 

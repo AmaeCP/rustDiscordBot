@@ -1,10 +1,31 @@
+use std::time::Duration;
+
 use crate::audio::source::AudioSource;
 use crate::audio::ytdl;
 use crate::error::BotError;
 use crate::types::{Context, Error};
 
 #[poise::command(slash_command, prefix_command, guild_only)]
-pub async fn skip(ctx: Context<'_>) -> Result<(), Error> {
+pub async fn replay(ctx: Context<'_>) -> Result<(), Error> {
+    let guild_id = ctx.guild_id().ok_or(BotError::VoiceJoin(
+        "Must be used in a server".to_string(),
+    ))?;
+
+    let queue_lock = ctx.data().get_queue(guild_id);
+    let queue = queue_lock.read().await;
+
+    if let Some(handle) = &queue.handle {
+        let _ = handle.seek(Duration::from_secs(0));
+        ctx.say("🔄 Replaying current track from the beginning.").await?;
+    } else {
+        ctx.say("Nothing is playing right now.").await?;
+    }
+
+    Ok(())
+}
+
+#[poise::command(slash_command, prefix_command, guild_only)]
+pub async fn previous(ctx: Context<'_>) -> Result<(), Error> {
     let guild_id = ctx.guild_id().ok_or(BotError::VoiceJoin(
         "Must be used in a server".to_string(),
     ))?;
@@ -17,23 +38,13 @@ pub async fn skip(ctx: Context<'_>) -> Result<(), Error> {
         .get(guild_id)
         .ok_or(BotError::VoiceNotConnected)?;
 
-    {
-        let mut call = handler.lock().await;
-        call.stop();
-    }
-
     let queue_lock = ctx.data().get_queue(guild_id);
-    let next_track = {
+    let prev_track = {
         let mut queue = queue_lock.write().await;
-        queue.skip()
+        queue.previous()
     };
 
-    if let Some(track) = next_track {
-        {
-            let mut queue = queue_lock.write().await;
-            queue.current = Some(track.clone());
-        }
-
+    if let Some(track) = prev_track {
         let input: songbird::input::Input = match &track.source {
             AudioSource::Youtube { url } | AudioSource::Playlist { url } => {
                 ytdl::build_source(url.clone(), ctx.data().http_client.clone()).into()
@@ -50,22 +61,18 @@ pub async fn skip(ctx: Context<'_>) -> Result<(), Error> {
         {
             let mut queue = queue_lock.write().await;
             let _ = handle.set_volume(queue.volume);
+            queue.current = Some(track.clone());
             queue.handle = Some(handle);
         }
 
         ctx.say(format!(
-            "⏭️ Skipped! Now playing: **{}** `[{}]`",
+            "⏮️ Playing previous track: **{}** `[{}]`",
             track.title,
             track.duration_string()
         ))
         .await?;
     } else {
-        {
-            let mut queue = queue_lock.write().await;
-            queue.current = None;
-            queue.handle = None;
-        }
-        ctx.say("⏭️ Skipped! Queue is now empty.").await?;
+        ctx.say("No previous track found in history.").await?;
     }
 
     Ok(())

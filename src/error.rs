@@ -21,8 +21,14 @@ pub enum BotError {
     AudioSource(String),
 
     #[error("Serenity error: {0}")]
-    Serenity(#[from] poise::serenity_prelude::Error),
+    Serenity(#[from] Box<poise::serenity_prelude::Error>),
 
     #[error("Failed to extract metadata: {0}")]
     MetadataExtraction(String),
+}
+
+impl From<poise::serenity_prelude::Error> for BotError {
+    fn from(err: poise::serenity_prelude::Error) -> Self {
+        Self::Serenity(Box::new(err))
+    }
 }

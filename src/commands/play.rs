@@ -139,6 +139,7 @@ pub async fn play(
                 let handle = play_next(&handler, &first, ctx.data().http_client.clone()).await?;
                 {
                     let mut queue = queue_lock.write().await;
+                    let _ = handle.set_volume(queue.volume);
                     queue.handle = Some(handle);
                 }
             }
@@ -200,6 +201,7 @@ pub async fn play(
                         let handle = play_next(&handler, &first, ctx.data().http_client.clone()).await?;
                         {
                             let mut queue = queue_lock.write().await;
+                            let _ = handle.set_volume(queue.volume);
                             queue.handle = Some(handle);
                         }
                     }
@@ -262,6 +264,7 @@ async fn play_single(
         let handle = play_next(handler, &track, ctx.data().http_client.clone()).await?;
         {
             let mut queue = queue_lock.write().await;
+            let _ = handle.set_volume(queue.volume);
             queue.handle = Some(handle);
         }
         ctx.say(format!(
