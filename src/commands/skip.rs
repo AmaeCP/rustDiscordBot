@@ -1,6 +1,5 @@
-use crate::audio::source::AudioSource;
-use crate::audio::ytdl;
 use crate::error::BotError;
+use crate::playback;
 use crate::types::{Context, Error};
 
 #[poise::command(slash_command, prefix_command, guild_only)]
@@ -13,11 +12,6 @@ pub async fn skip(ctx: Context<'_>) -> Result<(), Error> {
 
     let handler = manager.get(guild_id).ok_or(BotError::VoiceNotConnected)?;
 
-    {
-        let mut call = handler.lock().await;
-        call.stop();
-    }
-
     let queue_lock = ctx.data().get_queue(guild_id);
     let next_track = {
         let mut queue = queue_lock.write().await;
@@ -25,27 +19,16 @@ pub async fn skip(ctx: Context<'_>) -> Result<(), Error> {
     };
 
     if let Some(track) = next_track {
-        {
-            let mut queue = queue_lock.write().await;
-            queue.current = Some(track.clone());
-        }
-
-        let input: songbird::input::Input = match &track.source {
-            AudioSource::Youtube { url } | AudioSource::Playlist { url } => {
-                ytdl::build_source(url.clone(), ctx.data().http_client.clone()).into()
-            }
-            AudioSource::LocalFile { path } => songbird::input::File::new(path.clone()).into(),
-        };
-
-        let mut call = handler.lock().await;
-        let handle = call.play_input(input);
-        drop(call);
-
-        {
-            let mut queue = queue_lock.write().await;
-            let _ = handle.set_volume(queue.volume.as_f32());
-            queue.handle = Some(handle);
-        }
+        queue_lock.write().await.current = Some(track.clone());
+        playback::play_track(
+            &handler,
+            &track,
+            queue_lock.clone(),
+            ctx.data().clone(),
+            manager,
+            guild_id,
+        )
+        .await?;
 
         ctx.say(format!(
             "⏭️ Skipped! Now playing: **{}** `[{}]`",
@@ -60,7 +43,22 @@ pub async fn skip(ctx: Context<'_>) -> Result<(), Error> {
             queue.handle = None;
         }
         ctx.say("⏭️ Skipped! Queue is now empty.").await?;
+        playback::schedule_idle_disconnect(
+            queue_lock.clone(),
+            manager,
+            guild_id,
+            ctx.data().clone(),
+        )
+        .await;
     }
+
+    crate::panel::sync_panel(
+        &ctx.serenity_context().http,
+        ctx.data(),
+        guild_id,
+        ctx.channel_id(),
+    )
+    .await;
 
     Ok(())
 }

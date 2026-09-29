@@ -3,6 +3,7 @@ use poise::serenity_prelude as serenity;
 use crate::audio::source::AudioSource;
 use crate::audio::ytdl;
 use crate::error::BotError;
+use crate::playback;
 use crate::queue::track::QueuedTrack;
 use crate::types::{Context, Error};
 
@@ -17,7 +18,9 @@ fn split_urls(input: &str) -> Vec<String> {
         .collect()
 }
 
-fn get_voice_channel(ctx: Context<'_>) -> Result<(serenity::GuildId, serenity::ChannelId), Error> {
+pub(super) fn get_voice_channel(
+    ctx: Context<'_>,
+) -> Result<(serenity::GuildId, serenity::ChannelId), Error> {
     let guild_id = ctx.guild_id().ok_or(BotError::NotInGuild)?;
 
     let author_id = ctx.author().id;
@@ -40,17 +43,43 @@ fn get_voice_channel(ctx: Context<'_>) -> Result<(serenity::GuildId, serenity::C
     Err(BotError::UserNotInVoice.into())
 }
 
-async fn ensure_voice_connection(
+pub(super) async fn ensure_voice_connection(
     ctx: Context<'_>,
     guild_id: serenity::GuildId,
     channel_id: serenity::ChannelId,
-) -> Result<std::sync::Arc<tokio::sync::Mutex<songbird::Call>>, Error> {
+) -> Result<
+    (
+        std::sync::Arc<tokio::sync::Mutex<songbird::Call>>,
+        std::sync::Arc<songbird::Songbird>,
+    ),
+    Error,
+> {
     let manager = songbird::get(ctx.serenity_context())
         .await
         .ok_or(BotError::SongbirdNotInitialized)?;
 
     let handler = if let Some(handler) = manager.get(guild_id) {
-        handler
+        let current_channel = handler.lock().await.current_channel();
+        if current_channel.is_none()
+            || current_channel.is_some_and(|current| current != channel_id.into())
+        {
+            let queue = ctx.data().get_queue(guild_id);
+            let state = queue.read().await;
+            if !state.idle_waiting || !state.is_empty() {
+                return Err(BotError::WrongVoiceChannel.into());
+            }
+            drop(state);
+            manager
+                .remove(guild_id)
+                .await
+                .map_err(|e| BotError::VoiceJoin(format!("{e}")))?;
+            manager
+                .join(guild_id, channel_id)
+                .await
+                .map_err(|e| BotError::VoiceJoin(format!("{e}")))?
+        } else {
+            handler
+        }
     } else {
         manager
             .join(guild_id, channel_id)
@@ -58,24 +87,26 @@ async fn ensure_voice_connection(
             .map_err(|e| BotError::VoiceJoin(format!("{e}")))?
     };
 
-    Ok(handler)
+    ctx.data().get_queue(guild_id).write().await.active_channel = Some(channel_id);
+    Ok((handler, manager))
 }
 
 async fn play_next(
     handler: &std::sync::Arc<tokio::sync::Mutex<songbird::Call>>,
     track: &QueuedTrack,
-    http_client: reqwest::Client,
-) -> Result<songbird::tracks::TrackHandle, Error> {
-    let input: songbird::input::Input = match &track.source {
-        AudioSource::Youtube { url } | AudioSource::Playlist { url } => {
-            let src = ytdl::build_source(url.clone(), http_client);
-            src.into()
-        }
-        AudioSource::LocalFile { path } => songbird::input::File::new(path.clone()).into(),
-    };
-
-    let handle = handler.lock().await.play_input(input);
-    Ok(handle)
+    ctx: Context<'_>,
+    guild_id: serenity::GuildId,
+    manager: std::sync::Arc<songbird::Songbird>,
+) -> Result<(), Error> {
+    playback::play_track(
+        handler,
+        track,
+        ctx.data().get_queue(guild_id),
+        ctx.data().clone(),
+        manager,
+        guild_id,
+    )
+    .await
 }
 
 #[poise::command(slash_command, prefix_command, guild_only)]
@@ -88,7 +119,13 @@ pub async fn play(
     ctx.defer().await?;
 
     let (guild_id, channel_id) = get_voice_channel(ctx)?;
-    let handler = ensure_voice_connection(ctx, guild_id, channel_id).await?;
+    let (handler, manager) = ensure_voice_connection(ctx, guild_id, channel_id).await?;
+    {
+        let queue = ctx.data().get_queue(guild_id);
+        let mut state = queue.write().await;
+        state.idle_generation = state.idle_generation.wrapping_add(1);
+        state.idle_waiting = false;
+    }
 
     let url_tokens = split_urls(&query);
 
@@ -118,6 +155,13 @@ pub async fn play(
         if count == 0 {
             ctx.say("❌ Failed to extract audio from the provided URLs.")
                 .await?;
+            playback::schedule_idle_disconnect(
+                ctx.data().get_queue(guild_id),
+                manager,
+                guild_id,
+                ctx.data().clone(),
+            )
+            .await;
             return Ok(());
         }
 
@@ -136,17 +180,19 @@ pub async fn play(
                     queue.tracks.pop_front();
                     queue.current = Some(first.clone());
                 }
-                let handle = play_next(&handler, &first, ctx.data().http_client.clone()).await?;
-                {
-                    let mut queue = queue_lock.write().await;
-                    let _ = handle.set_volume(queue.volume.as_f32());
-                    queue.handle = Some(handle);
-                }
+                play_next(&handler, &first, ctx, guild_id, manager.clone()).await?;
             }
         }
 
         ctx.say(format!("📋 Added **{count}** tracks to the queue!"))
             .await?;
+        crate::panel::sync_panel(
+            &ctx.serenity_context().http,
+            ctx.data(),
+            guild_id,
+            ctx.channel_id(),
+        )
+        .await;
         return Ok(());
     }
 
@@ -198,13 +244,7 @@ pub async fn play(
                             queue.tracks.pop_front();
                             queue.current = Some(first.clone());
                         }
-                        let handle =
-                            play_next(&handler, &first, ctx.data().http_client.clone()).await?;
-                        {
-                            let mut queue = queue_lock.write().await;
-                            let _ = handle.set_volume(queue.volume.as_f32());
-                            queue.handle = Some(handle);
-                        }
+                        play_next(&handler, &first, ctx, guild_id, manager.clone()).await?;
                     }
                 }
 
@@ -212,13 +252,20 @@ pub async fn play(
                     "📋 Added **{count}** tracks from playlist to the queue!"
                 ))
                 .await?;
+                crate::panel::sync_panel(
+                    &ctx.serenity_context().http,
+                    ctx.data(),
+                    guild_id,
+                    ctx.channel_id(),
+                )
+                .await;
             } else {
-                play_single(ctx, guild_id, &handler, url).await?;
+                play_single(ctx, guild_id, &handler, url, manager.clone()).await?;
             }
         }
 
         AudioSource::Youtube { url } => {
-            play_single(ctx, guild_id, &handler, url).await?;
+            play_single(ctx, guild_id, &handler, url, manager.clone()).await?;
         }
 
         AudioSource::LocalFile { .. } => {
@@ -234,6 +281,7 @@ async fn play_single(
     guild_id: serenity::GuildId,
     handler: &std::sync::Arc<tokio::sync::Mutex<songbird::Call>>,
     url: &str,
+    manager: std::sync::Arc<songbird::Songbird>,
 ) -> Result<(), Error> {
     let metadata = ytdl::extract_metadata(url).await?;
     let title = metadata.title.unwrap_or_else(|| "Unknown".to_string());
@@ -261,12 +309,7 @@ async fn play_single(
             queue.tracks.pop_front();
             queue.current = Some(track.clone());
         }
-        let handle = play_next(handler, &track, ctx.data().http_client.clone()).await?;
-        {
-            let mut queue = queue_lock.write().await;
-            let _ = handle.set_volume(queue.volume.as_f32());
-            queue.handle = Some(handle);
-        }
+        play_next(handler, &track, ctx, guild_id, manager).await?;
         ctx.say(format!(
             "🎶 Now playing: **{}** `[{}]`",
             title,
@@ -282,5 +325,12 @@ async fn play_single(
         .await?;
     }
 
+    crate::panel::sync_panel(
+        &ctx.serenity_context().http,
+        ctx.data(),
+        guild_id,
+        ctx.channel_id(),
+    )
+    .await;
     Ok(())
 }

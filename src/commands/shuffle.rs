@@ -24,6 +24,13 @@ pub async fn shuffle(ctx: Context<'_>) -> Result<(), Error> {
     } else {
         ctx.say("Queue is empty. Nothing to shuffle.").await?;
     }
+    crate::panel::sync_panel(
+        &ctx.serenity_context().http,
+        ctx.data(),
+        guild_id,
+        ctx.channel_id(),
+    )
+    .await;
 
     Ok(())
 }

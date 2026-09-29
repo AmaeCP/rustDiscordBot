@@ -12,6 +12,9 @@ pub enum BotError {
     #[error("You must be in a voice channel to use this command")]
     UserNotInVoice,
 
+    #[error("The bot is active in another voice channel; join that channel to add tracks")]
+    WrongVoiceChannel,
+
     #[error("Failed to join voice channel: {0}")]
     VoiceJoin(String),
 

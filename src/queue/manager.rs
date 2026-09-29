@@ -95,6 +95,15 @@ pub struct GuildQueue {
     pub handle: Option<songbird::tracks::TrackHandle>,
     pub loop_mode: LoopMode,
     pub volume: Volume,
+    pub playback_generation: u64,
+    pub idle_generation: u64,
+    pub control_panel: Option<(
+        poise::serenity_prelude::ChannelId,
+        poise::serenity_prelude::MessageId,
+    )>,
+    pub active_channel: Option<poise::serenity_prelude::ChannelId>,
+    pub paused: bool,
+    pub idle_waiting: bool,
 }
 
 impl Default for GuildQueue {
@@ -106,6 +115,12 @@ impl Default for GuildQueue {
             handle: None,
             loop_mode: LoopMode::Off,
             volume: Volume::default(),
+            playback_generation: 0,
+            idle_generation: 0,
+            control_panel: None,
+            active_channel: None,
+            paused: false,
+            idle_waiting: false,
         }
     }
 }
@@ -116,10 +131,16 @@ impl GuildQueue {
     }
 
     pub fn add_track(&mut self, track: QueuedTrack) {
+        self.idle_generation = self.idle_generation.wrapping_add(1);
+        self.idle_waiting = false;
         self.tracks.push_back(track);
     }
 
     pub fn add_playlist(&mut self, tracks: Vec<QueuedTrack>) {
+        if !tracks.is_empty() {
+            self.idle_generation = self.idle_generation.wrapping_add(1);
+            self.idle_waiting = false;
+        }
         self.tracks.extend(tracks);
     }
 
@@ -152,6 +173,8 @@ impl GuildQueue {
     }
 
     pub fn skip(&mut self) -> Option<QueuedTrack> {
+        self.playback_generation = self.playback_generation.wrapping_add(1);
+        self.paused = false;
         if let Some(handle) = self.handle.take() {
             let _ = handle.stop();
         }
@@ -179,6 +202,11 @@ impl GuildQueue {
     }
 
     pub fn previous(&mut self) -> Option<QueuedTrack> {
+        if self.history.is_empty() {
+            return None;
+        }
+        self.playback_generation = self.playback_generation.wrapping_add(1);
+        self.paused = false;
         if let Some(handle) = self.handle.take() {
             let _ = handle.stop();
         }
@@ -238,11 +266,23 @@ impl GuildQueue {
     }
 
     pub fn clear(&mut self) {
+        self.idle_generation = self.idle_generation.wrapping_add(1);
+        self.playback_generation = self.playback_generation.wrapping_add(1);
         if let Some(handle) = self.handle.take() {
             let _ = handle.stop();
         }
         self.tracks.clear();
         self.current = None;
+        self.paused = false;
+        self.idle_waiting = false;
+    }
+
+    pub fn reset_after_disconnect(&mut self) {
+        self.clear();
+        self.history.clear();
+        self.loop_mode = LoopMode::Off;
+        self.handle = None;
+        self.active_channel = None;
     }
 
     pub fn toggle_loop(&mut self) -> LoopMode {
@@ -339,5 +379,34 @@ mod tests {
         queue.current = Some(t1);
         let repeated = queue.skip();
         assert_eq!(repeated.map(|t| t.title), Some("Track 1".to_string()));
+    }
+
+    #[test]
+    fn previous_without_history_keeps_current_playback_generation() {
+        let mut queue = GuildQueue::new();
+        queue.current = Some(sample_track("Current"));
+        queue.playback_generation = 7;
+
+        assert!(queue.previous().is_none());
+        assert_eq!(queue.playback_generation, 7);
+        assert_eq!(
+            queue.current.as_ref().map(|track| track.title.as_str()),
+            Some("Current")
+        );
+    }
+
+    #[test]
+    fn external_disconnect_resets_queue_and_voice_state() {
+        let mut queue = GuildQueue::new();
+        queue.current = Some(sample_track("Current"));
+        queue.add_track(sample_track("Queued"));
+        queue.active_channel = Some(poise::serenity_prelude::ChannelId::new(12));
+        queue.history.push_back(sample_track("Previous"));
+
+        queue.reset_after_disconnect();
+
+        assert!(queue.is_empty());
+        assert!(queue.history.is_empty());
+        assert!(queue.active_channel.is_none());
     }
 }

@@ -7,6 +7,7 @@ pub async fn pause(ctx: Context<'_>) -> Result<(), Error> {
 
     let queue_lock = ctx.data().get_queue(guild_id);
     let handle = queue_lock.read().await.handle.clone();
+    queue_lock.write().await.paused = true;
 
     if let Some(handle) = handle {
         let _ = handle.pause();
@@ -14,6 +15,14 @@ pub async fn pause(ctx: Context<'_>) -> Result<(), Error> {
     } else {
         ctx.say("Nothing is playing right now.").await?;
     }
+
+    crate::panel::sync_panel(
+        &ctx.serenity_context().http,
+        ctx.data(),
+        guild_id,
+        ctx.channel_id(),
+    )
+    .await;
 
     Ok(())
 }
@@ -24,6 +33,7 @@ pub async fn resume(ctx: Context<'_>) -> Result<(), Error> {
 
     let queue_lock = ctx.data().get_queue(guild_id);
     let handle = queue_lock.read().await.handle.clone();
+    queue_lock.write().await.paused = false;
 
     if let Some(handle) = handle {
         let _ = handle.play();
@@ -31,6 +41,14 @@ pub async fn resume(ctx: Context<'_>) -> Result<(), Error> {
     } else {
         ctx.say("Nothing is paused right now.").await?;
     }
+
+    crate::panel::sync_panel(
+        &ctx.serenity_context().http,
+        ctx.data(),
+        guild_id,
+        ctx.channel_id(),
+    )
+    .await;
 
     Ok(())
 }

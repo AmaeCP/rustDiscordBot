@@ -32,6 +32,13 @@ pub async fn queue(
     };
 
     ctx.say(response).await?;
+    crate::panel::sync_panel(
+        &ctx.serenity_context().http,
+        ctx.data(),
+        guild_id,
+        ctx.channel_id(),
+    )
+    .await;
 
     Ok(())
 }

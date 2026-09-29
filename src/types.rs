@@ -9,17 +9,25 @@ use crate::queue::manager::GuildQueue;
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Context<'a> = poise::Context<'a, Data, Error>;
 
-#[derive(Debug, Default)]
+#[derive(Default, Clone)]
 pub struct Data {
     pub guild_queues: Arc<DashMap<serenity::GuildId, Arc<RwLock<GuildQueue>>>>,
+    pub panel_locks: Arc<DashMap<serenity::GuildId, Arc<tokio::sync::Mutex<()>>>>,
     pub voice_states:
         Arc<DashMap<serenity::GuildId, DashMap<serenity::UserId, serenity::ChannelId>>>,
     pub http_client: reqwest::Client,
+    pub http: Arc<std::sync::RwLock<Option<Arc<serenity::Http>>>>,
 }
 
 impl Data {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn set_http(&self, http: Arc<serenity::Http>) {
+        if let Ok(mut slot) = self.http.write() {
+            *slot = Some(http);
+        }
     }
 
     pub fn get_queue(&self, guild_id: serenity::GuildId) -> Arc<RwLock<GuildQueue>> {
@@ -28,6 +36,15 @@ impl Data {
                 .guild_queues
                 .entry(guild_id)
                 .or_insert_with(|| Arc::new(RwLock::new(GuildQueue::new()))),
+        )
+    }
+
+    pub fn get_panel_lock(&self, guild_id: serenity::GuildId) -> Arc<tokio::sync::Mutex<()>> {
+        Arc::clone(
+            &self
+                .panel_locks
+                .entry(guild_id)
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
         )
     }
 

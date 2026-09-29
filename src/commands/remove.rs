@@ -18,6 +18,13 @@ pub async fn remove(
 
     ctx.say(format!("🗑️ Removed **{}** from the queue.", removed.title))
         .await?;
+    crate::panel::sync_panel(
+        &ctx.serenity_context().http,
+        ctx.data(),
+        guild_id,
+        ctx.channel_id(),
+    )
+    .await;
 
     Ok(())
 }

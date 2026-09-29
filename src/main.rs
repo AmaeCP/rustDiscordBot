@@ -1,6 +1,8 @@
 mod audio;
 mod commands;
 mod error;
+mod panel;
+mod playback;
 mod queue;
 mod types;
 
@@ -45,7 +47,7 @@ async fn main() -> anyhow::Result<()> {
                                 }
                             }
                         }
-                        serenity::FullEvent::VoiceStateUpdate { old: _, new } => {
+                        serenity::FullEvent::VoiceStateUpdate { old, new } => {
                             if let Some(guild_id) = new.guild_id {
                                 if let Some(channel_id) = new.channel_id {
                                     tracing::info!(
@@ -63,8 +65,44 @@ async fn main() -> anyhow::Result<()> {
                                     );
                                     user_data.remove_user_voice(guild_id, new.user_id);
                                 }
+
+                                if new.user_id == _ctx.cache.current_user().id {
+                                    if new.channel_id.is_none()
+                                        && (old
+                                            .as_ref()
+                                            .and_then(|state| state.channel_id)
+                                            .is_some()
+                                            || user_data
+                                                .get_queue(guild_id)
+                                                .read()
+                                                .await
+                                                .active_channel
+                                                .is_some())
+                                    {
+                                        if let Some(manager) = songbird::get(_ctx).await {
+                                            if manager.get(guild_id).is_some() {
+                                                let _ = manager.remove(guild_id).await;
+                                            }
+                                        }
+                                        let queue = user_data.get_queue(guild_id);
+                                        queue.write().await.reset_after_disconnect();
+                                        crate::panel::disable_panel(
+                                            &_ctx.http, user_data, guild_id,
+                                        )
+                                        .await;
+                                    } else if let Some(channel_id) = new.channel_id {
+                                        user_data
+                                            .get_queue(guild_id)
+                                            .write()
+                                            .await
+                                            .active_channel = Some(channel_id);
+                                    }
+                                }
                             }
                         }
+                        serenity::FullEvent::InteractionCreate {
+                            interaction: serenity::Interaction::Component(component),
+                        } => crate::panel::handle_component(_ctx, user_data, component).await,
                         _ => {}
                     }
                     Ok(())
@@ -76,6 +114,17 @@ async fn main() -> anyhow::Result<()> {
                         poise::FrameworkError::Command { error, ctx, .. } => {
                             let msg = format!("❌ {error}");
                             let _ = ctx.say(&msg).await;
+                            if let Some(guild_id) = ctx.guild_id() {
+                                if let Some(manager) = songbird::get(ctx.serenity_context()).await {
+                                    crate::playback::schedule_idle_disconnect(
+                                        ctx.data().get_queue(guild_id),
+                                        manager,
+                                        guild_id,
+                                        ctx.data().clone(),
+                                    )
+                                    .await;
+                                }
+                            }
                             tracing::error!("Command error: {error}");
                         }
                         other => {
@@ -105,7 +154,9 @@ async fn main() -> anyhow::Result<()> {
                     .await;
                 }
                 poise::builtins::register_globally(ctx, &framework.options().commands).await?;
-                Ok(Data::new())
+                let data = Data::new();
+                data.set_http(ctx.http.clone());
+                Ok(data)
             })
         })
         .build();

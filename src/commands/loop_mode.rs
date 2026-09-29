@@ -22,6 +22,13 @@ pub async fn loop_cmd(
 
     ctx.say(format!("🔁 Loop mode set to: **{}**", new_mode.display()))
         .await?;
+    crate::panel::sync_panel(
+        &ctx.serenity_context().http,
+        ctx.data(),
+        guild_id,
+        ctx.channel_id(),
+    )
+    .await;
 
     Ok(())
 }

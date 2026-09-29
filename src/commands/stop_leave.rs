@@ -1,4 +1,5 @@
 use crate::error::BotError;
+use crate::playback;
 use crate::types::{Context, Error};
 
 #[poise::command(slash_command, prefix_command, guild_only)]
@@ -15,6 +16,13 @@ pub async fn clear(ctx: Context<'_>) -> Result<(), Error> {
 
     ctx.say(format!("🗑️ Cleared **{count}** tracks from the queue."))
         .await?;
+    crate::panel::sync_panel(
+        &ctx.serenity_context().http,
+        ctx.data(),
+        guild_id,
+        ctx.channel_id(),
+    )
+    .await;
 
     Ok(())
 }
@@ -27,11 +35,8 @@ pub async fn stop(ctx: Context<'_>) -> Result<(), Error> {
         .await
         .ok_or(BotError::VoiceNotConnected)?;
 
-    let handler = manager.get(guild_id).ok_or(BotError::VoiceNotConnected)?;
-
-    {
-        let mut call = handler.lock().await;
-        call.stop();
+    if manager.get(guild_id).is_none() {
+        return Err(BotError::VoiceNotConnected.into());
     }
 
     let queue_lock = ctx.data().get_queue(guild_id);
@@ -41,6 +46,14 @@ pub async fn stop(ctx: Context<'_>) -> Result<(), Error> {
     }
 
     ctx.say("⏹️ Stopped and cleared the entire queue.").await?;
+    playback::schedule_idle_disconnect(queue_lock, manager, guild_id, ctx.data().clone()).await;
+    crate::panel::sync_panel(
+        &ctx.serenity_context().http,
+        ctx.data(),
+        guild_id,
+        ctx.channel_id(),
+    )
+    .await;
 
     Ok(())
 }
@@ -64,10 +77,8 @@ pub async fn leave(ctx: Context<'_>) -> Result<(), Error> {
         .map_err(|e| BotError::VoiceJoin(format!("Failed to leave: {e}")))?;
 
     let queue_lock = ctx.data().get_queue(guild_id);
-    {
-        let mut queue = queue_lock.write().await;
-        queue.clear();
-    }
+    queue_lock.write().await.reset_after_disconnect();
+    crate::panel::disable_panel(&ctx.serenity_context().http, ctx.data(), guild_id).await;
 
     ctx.say("👋 Left the voice channel.").await?;
 

@@ -1,8 +1,8 @@
 use poise::serenity_prelude as serenity;
 
 use crate::audio::source::AudioSource;
-use crate::audio::ytdl;
 use crate::error::BotError;
+use crate::playback;
 use crate::queue::track::QueuedTrack;
 use crate::types::{Context, Error};
 
@@ -22,32 +22,15 @@ pub async fn play_local(
         return Ok(());
     }
 
-    let guild_id = ctx.guild_id().ok_or(BotError::NotInGuild)?;
-
-    let author_id = ctx.author().id;
-
-    let channel_id = if let Some(ch) = ctx.data().get_user_voice(guild_id, author_id) {
-        ch
-    } else {
-        let cache = &ctx.serenity_context().cache;
-        cache
-            .guild(guild_id)
-            .and_then(|g| g.voice_states.get(&author_id).and_then(|vs| vs.channel_id))
-            .ok_or(BotError::UserNotInVoice)?
-    };
-
-    let manager = songbird::get(ctx.serenity_context())
-        .await
-        .ok_or(BotError::SongbirdNotInitialized)?;
-
-    let handler = if let Some(handler) = manager.get(guild_id) {
-        handler
-    } else {
-        manager
-            .join(guild_id, channel_id)
-            .await
-            .map_err(|e| BotError::VoiceJoin(format!("{e}")))?
-    };
+    let (guild_id, channel_id) = crate::commands::play::get_voice_channel(ctx)?;
+    let (handler, manager) =
+        crate::commands::play::ensure_voice_connection(ctx, guild_id, channel_id).await?;
+    {
+        let queue = ctx.data().get_queue(guild_id);
+        let mut state = queue.write().await;
+        state.idle_generation = state.idle_generation.wrapping_add(1);
+        state.idle_waiting = false;
+    }
 
     if let Some(attachment) = file {
         let file_name = attachment.filename.clone();
@@ -69,23 +52,17 @@ pub async fn play_local(
         };
 
         if should_play {
-            {
-                let mut queue = queue_lock.write().await;
-                queue.tracks.pop_front();
-                queue.current = Some(track.clone());
-            }
-
-            let input: songbird::input::Input =
-                ytdl::build_source(url, ctx.data().http_client.clone()).into();
-            let mut call = handler.lock().await;
-            let handle = call.play_input(input);
-            drop(call);
-
-            {
-                let mut queue = queue_lock.write().await;
-                let _ = handle.set_volume(queue.volume.as_f32());
-                queue.handle = Some(handle);
-            }
+            queue_lock.write().await.tracks.pop_front();
+            queue_lock.write().await.current = Some(track.clone());
+            playback::play_track(
+                &handler,
+                &track,
+                queue_lock.clone(),
+                ctx.data().clone(),
+                manager.clone(),
+                guild_id,
+            )
+            .await?;
 
             ctx.say(format!("🎵 Now playing uploaded file: **{file_name}**"))
                 .await?;
@@ -96,6 +73,14 @@ pub async fn play_local(
             ))
             .await?;
         }
+
+        crate::panel::sync_panel(
+            &ctx.serenity_context().http,
+            ctx.data(),
+            guild_id,
+            ctx.channel_id(),
+        )
+        .await;
 
         return Ok(());
     }
@@ -131,16 +116,16 @@ pub async fn play_local(
                 queue.current = Some(track.clone());
             }
 
-            let input: songbird::input::Input = songbird::input::File::new(file_path).into();
-            let mut call = handler.lock().await;
-            let handle = call.play_input(input);
-            drop(call);
-
-            {
-                let mut queue = queue_lock.write().await;
-                let _ = handle.set_volume(queue.volume.as_f32());
-                queue.handle = Some(handle);
-            }
+            queue_lock.write().await.current = Some(track.clone());
+            playback::play_track(
+                &handler,
+                &track,
+                queue_lock.clone(),
+                ctx.data().clone(),
+                manager,
+                guild_id,
+            )
+            .await?;
 
             ctx.say(format!("🎵 Now playing local file: **{file_name}**"))
                 .await?;
@@ -152,6 +137,14 @@ pub async fn play_local(
             .await?;
         }
     }
+
+    crate::panel::sync_panel(
+        &ctx.serenity_context().http,
+        ctx.data(),
+        guild_id,
+        ctx.channel_id(),
+    )
+    .await;
 
     Ok(())
 }
