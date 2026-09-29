@@ -12,13 +12,19 @@ fn parse_time(input: &str) -> Option<Duration> {
             2 => {
                 let mins: u64 = parts[0].parse().ok()?;
                 let secs: u64 = parts[1].parse().ok()?;
-                Some(Duration::from_secs(mins * 60 + secs))
+                mins.checked_mul(60)?
+                    .checked_add(secs)
+                    .map(Duration::from_secs)
             }
             3 => {
                 let hours: u64 = parts[0].parse().ok()?;
                 let mins: u64 = parts[1].parse().ok()?;
                 let secs: u64 = parts[2].parse().ok()?;
-                Some(Duration::from_secs(hours * 3600 + mins * 60 + secs))
+                hours
+                    .checked_mul(3600)?
+                    .checked_add(mins.checked_mul(60)?)?
+                    .checked_add(secs)
+                    .map(Duration::from_secs)
             }
             _ => None,
         }
@@ -33,22 +39,52 @@ pub async fn seek(
     ctx: Context<'_>,
     #[description = "Timestamp to seek to (e.g. 1:30 or 90)"] position: String,
 ) -> Result<(), Error> {
-    let guild_id = ctx.guild_id().ok_or(BotError::VoiceJoin(
-        "Must be used in a server".to_string(),
-    ))?;
+    let guild_id = ctx.guild_id().ok_or(BotError::NotInGuild)?;
 
-    let duration = parse_time(&position)
-        .ok_or_else(|| BotError::AudioSource("Invalid timestamp format. Use mm:ss or seconds (e.g. 1:30 or 90)".to_string()))?;
+    let duration =
+        parse_time(&position).ok_or_else(|| BotError::InvalidTimestamp(position.clone()))?;
 
     let queue_lock = ctx.data().get_queue(guild_id);
-    let queue = queue_lock.read().await;
+    let handle = queue_lock.read().await.handle.clone();
 
-    if let Some(handle) = &queue.handle {
+    if let Some(handle) = handle {
         let _ = handle.seek(duration);
-        ctx.say(format!("⏩ Seeked to **{}**", ytdl::format_duration(Some(duration.as_secs_f64())))).await?;
+        ctx.say(format!(
+            "⏩ Seeked to **{}**",
+            ytdl::format_duration(Some(duration.as_secs_f64()))
+        ))
+        .await?;
     } else {
         ctx.say("Nothing is playing right now.").await?;
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_time_seconds() {
+        assert_eq!(parse_time("90"), Some(Duration::from_secs(90)));
+    }
+
+    #[test]
+    fn test_parse_time_minutes_seconds() {
+        assert_eq!(parse_time("1:30"), Some(Duration::from_secs(90)));
+    }
+
+    #[test]
+    fn test_parse_time_hours_minutes_seconds() {
+        assert_eq!(parse_time("1:02:05"), Some(Duration::from_secs(3725)));
+    }
+
+    #[test]
+    fn test_parse_time_invalid() {
+        assert_eq!(parse_time("abc"), None);
+        assert_eq!(parse_time("1:2:3:4"), None);
+        assert_eq!(parse_time("18446744073709551615:0"), None);
+        assert_eq!(parse_time("1:18446744073709551615:0"), None);
+    }
 }

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AudioSource {
     Youtube { url: String },
     Playlist { url: String },
@@ -60,6 +60,46 @@ impl AudioSource {
         match self {
             Self::Youtube { url } | Self::Playlist { url } => url,
             Self::LocalFile { path } => path.to_str().unwrap_or(""),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_search_query_prefix() {
+        let source = AudioSource::from_input("Rick Astley - Never Gonna Give You Up");
+        match source {
+            AudioSource::Youtube { url } => {
+                assert_eq!(url, "ytsearch1:Rick Astley - Never Gonna Give You Up");
+            }
+            _ => panic!("Expected YouTube search query"),
+        }
+    }
+
+    #[test]
+    fn test_playlist_detection() {
+        let source = AudioSource::from_input("https://www.youtube.com/playlist?list=PL12345");
+        match source {
+            AudioSource::Playlist { url } => {
+                assert!(url.contains("playlist?list=PL12345"));
+            }
+            _ => panic!("Expected Playlist"),
+        }
+    }
+
+    #[test]
+    fn test_radio_mix_cleaned() {
+        let source = AudioSource::from_input(
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=RDdQw4w9WgXcQ",
+        );
+        match source {
+            AudioSource::Youtube { url } => {
+                assert_eq!(url, "https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+            }
+            _ => panic!("Expected cleaned YouTube single track URL"),
         }
     }
 }

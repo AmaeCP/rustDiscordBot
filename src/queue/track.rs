@@ -8,23 +8,20 @@ pub struct QueuedTrack {
     pub duration: Option<f64>,
     pub requester: serenity::UserId,
     pub source: AudioSource,
-    pub url: String,
 }
 
 impl QueuedTrack {
-    pub fn new(
+    pub const fn new(
         title: String,
         duration: Option<f64>,
         requester: serenity::UserId,
         source: AudioSource,
-        url: String,
     ) -> Self {
         Self {
             title,
             duration,
             requester,
             source,
-            url,
         }
     }
 

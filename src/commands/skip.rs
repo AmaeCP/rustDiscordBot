@@ -5,17 +5,13 @@ use crate::types::{Context, Error};
 
 #[poise::command(slash_command, prefix_command, guild_only)]
 pub async fn skip(ctx: Context<'_>) -> Result<(), Error> {
-    let guild_id = ctx.guild_id().ok_or(BotError::VoiceJoin(
-        "Must be used in a server".to_string(),
-    ))?;
+    let guild_id = ctx.guild_id().ok_or(BotError::NotInGuild)?;
 
     let manager = songbird::get(ctx.serenity_context())
         .await
         .ok_or(BotError::VoiceNotConnected)?;
 
-    let handler = manager
-        .get(guild_id)
-        .ok_or(BotError::VoiceNotConnected)?;
+    let handler = manager.get(guild_id).ok_or(BotError::VoiceNotConnected)?;
 
     {
         let mut call = handler.lock().await;
@@ -38,9 +34,7 @@ pub async fn skip(ctx: Context<'_>) -> Result<(), Error> {
             AudioSource::Youtube { url } | AudioSource::Playlist { url } => {
                 ytdl::build_source(url.clone(), ctx.data().http_client.clone()).into()
             }
-            AudioSource::LocalFile { path } => {
-                songbird::input::File::new(path.clone()).into()
-            }
+            AudioSource::LocalFile { path } => songbird::input::File::new(path.clone()).into(),
         };
 
         let mut call = handler.lock().await;
@@ -49,7 +43,7 @@ pub async fn skip(ctx: Context<'_>) -> Result<(), Error> {
 
         {
             let mut queue = queue_lock.write().await;
-            let _ = handle.set_volume(queue.volume);
+            let _ = handle.set_volume(queue.volume.as_f32());
             queue.handle = Some(handle);
         }
 

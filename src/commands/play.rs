@@ -7,20 +7,18 @@ use crate::queue::track::QueuedTrack;
 use crate::types::{Context, Error};
 
 fn split_urls(input: &str) -> Vec<String> {
-    let spaced = input.replace("https://", " https://").replace("http://", " http://");
+    let spaced = input
+        .replace("https://", " https://")
+        .replace("http://", " http://");
     spaced
         .split_whitespace()
         .filter(|t| t.starts_with("http://") || t.starts_with("https://"))
-        .map(|s| s.to_string())
+        .map(ToString::to_string)
         .collect()
 }
 
-async fn get_voice_channel(
-    ctx: Context<'_>,
-) -> Result<(serenity::GuildId, serenity::ChannelId), Error> {
-    let guild_id = ctx.guild_id().ok_or(BotError::VoiceJoin(
-        "Must be used in a server".to_string(),
-    ))?;
+fn get_voice_channel(ctx: Context<'_>) -> Result<(serenity::GuildId, serenity::ChannelId), Error> {
+    let guild_id = ctx.guild_id().ok_or(BotError::NotInGuild)?;
 
     let author_id = ctx.author().id;
 
@@ -30,7 +28,11 @@ async fn get_voice_channel(
 
     let cache = &ctx.serenity_context().cache;
     if let Some(guild) = cache.guild(guild_id) {
-        if let Some(channel_id) = guild.voice_states.get(&author_id).and_then(|vs| vs.channel_id) {
+        if let Some(channel_id) = guild
+            .voice_states
+            .get(&author_id)
+            .and_then(|vs| vs.channel_id)
+        {
             return Ok((guild_id, channel_id));
         }
     }
@@ -45,7 +47,7 @@ async fn ensure_voice_connection(
 ) -> Result<std::sync::Arc<tokio::sync::Mutex<songbird::Call>>, Error> {
     let manager = songbird::get(ctx.serenity_context())
         .await
-        .ok_or(BotError::VoiceJoin("Songbird not initialized".to_string()))?;
+        .ok_or(BotError::SongbirdNotInitialized)?;
 
     let handler = if let Some(handler) = manager.get(guild_id) {
         handler
@@ -64,19 +66,15 @@ async fn play_next(
     track: &QueuedTrack,
     http_client: reqwest::Client,
 ) -> Result<songbird::tracks::TrackHandle, Error> {
-    let mut call = handler.lock().await;
-
     let input: songbird::input::Input = match &track.source {
         AudioSource::Youtube { url } | AudioSource::Playlist { url } => {
             let src = ytdl::build_source(url.clone(), http_client);
             src.into()
         }
-        AudioSource::LocalFile { path } => {
-            songbird::input::File::new(path.clone()).into()
-        }
+        AudioSource::LocalFile { path } => songbird::input::File::new(path.clone()).into(),
     };
 
-    let handle = call.play_input(input);
+    let handle = handler.lock().await.play_input(input);
     Ok(handle)
 }
 
@@ -89,7 +87,7 @@ pub async fn play(
 ) -> Result<(), Error> {
     ctx.defer().await?;
 
-    let (guild_id, channel_id) = get_voice_channel(ctx).await?;
+    let (guild_id, channel_id) = get_voice_channel(ctx)?;
     let handler = ensure_voice_connection(ctx, guild_id, channel_id).await?;
 
     let url_tokens = split_urls(&query);
@@ -103,21 +101,23 @@ pub async fn play(
 
             if let Ok(metadata) = ytdl::extract_metadata(target_url).await {
                 let title = metadata.title.unwrap_or_else(|| "Unknown".to_string());
-                let actual_url = metadata.webpage_url.unwrap_or_else(|| target_url.to_string());
+                let actual_url = metadata
+                    .webpage_url
+                    .unwrap_or_else(|| target_url.to_string());
 
                 tracks.push(QueuedTrack::new(
                     title,
                     metadata.duration,
                     ctx.author().id,
-                    AudioSource::Youtube { url: actual_url.clone() },
-                    actual_url,
+                    AudioSource::Youtube { url: actual_url },
                 ));
             }
         }
 
         let count = tracks.len();
         if count == 0 {
-            ctx.say("❌ Failed to extract audio from the provided URLs.").await?;
+            ctx.say("❌ Failed to extract audio from the provided URLs.")
+                .await?;
             return Ok(());
         }
 
@@ -139,13 +139,14 @@ pub async fn play(
                 let handle = play_next(&handler, &first, ctx.data().http_client.clone()).await?;
                 {
                     let mut queue = queue_lock.write().await;
-                    let _ = handle.set_volume(queue.volume);
+                    let _ = handle.set_volume(queue.volume.as_f32());
                     queue.handle = Some(handle);
                 }
             }
         }
 
-        ctx.say(format!("📋 Added **{count}** tracks to the queue!")).await?;
+        ctx.say(format!("📋 Added **{count}** tracks to the queue!"))
+            .await?;
         return Ok(());
     }
 
@@ -159,7 +160,9 @@ pub async fn play(
 
     match &source {
         AudioSource::Playlist { url } => {
-            let entries = ytdl::extract_playlist_entries(url).await.unwrap_or_default();
+            let entries = ytdl::extract_playlist_entries(url)
+                .await
+                .unwrap_or_default();
             let count = entries.len();
 
             if count > 0 {
@@ -176,10 +179,7 @@ pub async fn play(
                         entry.title.unwrap_or_else(|| "Unknown".to_string()),
                         entry.duration,
                         ctx.author().id,
-                        AudioSource::Youtube {
-                            url: full_url.clone(),
-                        },
-                        full_url,
+                        AudioSource::Youtube { url: full_url },
                     ));
                 }
 
@@ -198,10 +198,11 @@ pub async fn play(
                             queue.tracks.pop_front();
                             queue.current = Some(first.clone());
                         }
-                        let handle = play_next(&handler, &first, ctx.data().http_client.clone()).await?;
+                        let handle =
+                            play_next(&handler, &first, ctx.data().http_client.clone()).await?;
                         {
                             let mut queue = queue_lock.write().await;
-                            let _ = handle.set_volume(queue.volume);
+                            let _ = handle.set_volume(queue.volume.as_f32());
                             queue.handle = Some(handle);
                         }
                     }
@@ -243,8 +244,7 @@ async fn play_single(
         title.clone(),
         duration,
         ctx.author().id,
-        AudioSource::Youtube { url: actual_url.clone() },
-        actual_url,
+        AudioSource::Youtube { url: actual_url },
     );
 
     let queue_lock = ctx.data().get_queue(guild_id);
@@ -264,7 +264,7 @@ async fn play_single(
         let handle = play_next(handler, &track, ctx.data().http_client.clone()).await?;
         {
             let mut queue = queue_lock.write().await;
-            let _ = handle.set_volume(queue.volume);
+            let _ = handle.set_volume(queue.volume.as_f32());
             queue.handle = Some(handle);
         }
         ctx.say(format!(
@@ -274,8 +274,7 @@ async fn play_single(
         ))
         .await?;
     } else {
-        let queue = queue_lock.read().await;
-        let pos = queue.tracks.len();
+        let pos = queue_lock.read().await.tracks.len();
         ctx.say(format!(
             "📥 Added to queue at position **#{pos}**: **{title}** `[{}]`",
             ytdl::format_duration(duration)

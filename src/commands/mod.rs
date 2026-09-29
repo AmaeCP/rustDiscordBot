@@ -6,11 +6,11 @@ pub mod play_local;
 pub mod queue;
 pub mod remove;
 pub mod replay;
+pub mod seek;
 pub mod shuffle;
 pub mod skip;
 pub mod stop_leave;
 pub mod volume;
-pub mod seek;
 
 use crate::types::{Data, Error};
 

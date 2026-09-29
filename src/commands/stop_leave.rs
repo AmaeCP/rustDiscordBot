@@ -3,9 +3,7 @@ use crate::types::{Context, Error};
 
 #[poise::command(slash_command, prefix_command, guild_only)]
 pub async fn clear(ctx: Context<'_>) -> Result<(), Error> {
-    let guild_id = ctx.guild_id().ok_or(BotError::VoiceJoin(
-        "Must be used in a server".to_string(),
-    ))?;
+    let guild_id = ctx.guild_id().ok_or(BotError::NotInGuild)?;
 
     let queue_lock = ctx.data().get_queue(guild_id);
     let count = {
@@ -15,24 +13,21 @@ pub async fn clear(ctx: Context<'_>) -> Result<(), Error> {
         len
     };
 
-    ctx.say(format!("🗑️ Cleared **{count}** tracks from the queue.")).await?;
+    ctx.say(format!("🗑️ Cleared **{count}** tracks from the queue."))
+        .await?;
 
     Ok(())
 }
 
 #[poise::command(slash_command, prefix_command, guild_only)]
 pub async fn stop(ctx: Context<'_>) -> Result<(), Error> {
-    let guild_id = ctx.guild_id().ok_or(BotError::VoiceJoin(
-        "Must be used in a server".to_string(),
-    ))?;
+    let guild_id = ctx.guild_id().ok_or(BotError::NotInGuild)?;
 
     let manager = songbird::get(ctx.serenity_context())
         .await
         .ok_or(BotError::VoiceNotConnected)?;
 
-    let handler = manager
-        .get(guild_id)
-        .ok_or(BotError::VoiceNotConnected)?;
+    let handler = manager.get(guild_id).ok_or(BotError::VoiceNotConnected)?;
 
     {
         let mut call = handler.lock().await;
@@ -52,9 +47,7 @@ pub async fn stop(ctx: Context<'_>) -> Result<(), Error> {
 
 #[poise::command(slash_command, prefix_command, guild_only)]
 pub async fn leave(ctx: Context<'_>) -> Result<(), Error> {
-    let guild_id = ctx.guild_id().ok_or(BotError::VoiceJoin(
-        "Must be used in a server".to_string(),
-    ))?;
+    let guild_id = ctx.guild_id().ok_or(BotError::NotInGuild)?;
 
     let manager = songbird::get(ctx.serenity_context())
         .await

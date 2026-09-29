@@ -1,11 +1,10 @@
-#![allow(dead_code)]
-
 mod audio;
 mod commands;
 mod error;
 mod queue;
 mod types;
 
+use anyhow::Context;
 use poise::serenity_prelude as serenity;
 use songbird::SerenityInit;
 use tracing_subscriber::EnvFilter;
@@ -13,7 +12,7 @@ use tracing_subscriber::EnvFilter;
 use types::Data;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
 
     tracing_subscriber::fmt()
@@ -22,7 +21,7 @@ async fn main() {
         )
         .init();
 
-    let token = std::env::var("DISCORD_TOKEN").expect("DISCORD_TOKEN must be set in .env");
+    let token = std::env::var("DISCORD_TOKEN").context("DISCORD_TOKEN must be set in .env")?;
 
     let intents = serenity::GatewayIntents::all();
 
@@ -98,7 +97,12 @@ async fn main() {
                     ready.guilds.iter().map(|g| g.id).collect::<Vec<_>>()
                 );
                 for guild in &ready.guilds {
-                    let _ = poise::builtins::register_in_guild(ctx, &framework.options().commands, guild.id).await;
+                    let _ = poise::builtins::register_in_guild(
+                        ctx,
+                        &framework.options().commands,
+                        guild.id,
+                    )
+                    .await;
                 }
                 poise::builtins::register_globally(ctx, &framework.options().commands).await?;
                 Ok(Data::new())
@@ -110,9 +114,11 @@ async fn main() {
         .framework(framework)
         .register_songbird()
         .await
-        .expect("Failed to create client");
+        .context("Failed to create serenity client")?;
 
-    if let Err(e) = client.start().await {
-        tracing::error!("Client error: {e}");
-    }
+    client
+        .start()
+        .await
+        .context("Client encountered a runtime error")?;
+    Ok(())
 }

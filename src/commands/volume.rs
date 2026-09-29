@@ -1,23 +1,22 @@
 use crate::error::BotError;
+use crate::queue::manager::Volume;
 use crate::types::{Context, Error};
 
 #[poise::command(slash_command, prefix_command, guild_only)]
 pub async fn volume(
     ctx: Context<'_>,
-    #[description = "Volume level (1 to 200)"]
-    #[min = 1]
+    #[description = "Volume level (0 to 200)"]
+    #[min = 0]
     #[max = 200]
     level: u32,
 ) -> Result<(), Error> {
-    let guild_id = ctx.guild_id().ok_or(BotError::VoiceJoin(
-        "Must be used in a server".to_string(),
-    ))?;
+    let guild_id = ctx.guild_id().ok_or(BotError::NotInGuild)?;
 
-    let vol_float = level as f32 / 100.0;
+    let level = level.min(200);
+    let vol = Volume::from_percent(level);
 
     let queue_lock = ctx.data().get_queue(guild_id);
-    let mut queue = queue_lock.write().await;
-    queue.set_volume(vol_float);
+    queue_lock.write().await.set_volume(vol);
 
     let icon = if level == 0 {
         "🔇"
@@ -27,7 +26,8 @@ pub async fn volume(
         "🔊"
     };
 
-    ctx.say(format!("{icon} Volume set to **{level}%**")).await?;
+    ctx.say(format!("{icon} Volume set to **{level}%**"))
+        .await?;
 
     Ok(())
 }

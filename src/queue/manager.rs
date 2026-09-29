@@ -7,8 +7,58 @@ use crate::audio::ytdl;
 use crate::error::BotError;
 use crate::queue::track::QueuedTrack;
 
-#[derive(Debug, Clone, Copy, PartialEq, poise::ChoiceParameter)]
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct QueueIndex(usize);
+
+impl QueueIndex {
+    #[must_use]
+    pub const fn new(index: usize) -> Self {
+        Self(index)
+    }
+
+    #[must_use]
+    pub const fn to_zero_based(self) -> Option<usize> {
+        if self.0 == 0 {
+            None
+        } else {
+            Some(self.0 - 1)
+        }
+    }
+
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.0
+    }
+}
+
+/// Audio volume factor constrained to the supported range.
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct Volume(f32);
+
+impl Volume {
+    #[must_use]
+    pub fn from_percent(percent: u32) -> Self {
+        let factor = percent.min(200) as f32 / 100.0;
+        Self(factor.clamp(0.0, 2.0))
+    }
+
+    #[must_use]
+    pub const fn as_f32(self) -> f32 {
+        self.0
+    }
+}
+
+impl Default for Volume {
+    fn default() -> Self {
+        Self(1.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, poise::ChoiceParameter)]
 pub enum LoopMode {
+    #[default]
     #[name = "Off"]
     Off,
     #[name = "Track (Single)"]
@@ -18,7 +68,8 @@ pub enum LoopMode {
 }
 
 impl LoopMode {
-    pub fn next(&self) -> Self {
+    #[must_use]
+    pub const fn next(self) -> Self {
         match self {
             Self::Off => Self::Track,
             Self::Track => Self::Queue,
@@ -26,7 +77,8 @@ impl LoopMode {
         }
     }
 
-    pub fn display(&self) -> &str {
+    #[must_use]
+    pub const fn display(self) -> &'static str {
         match self {
             Self::Off => "Off",
             Self::Track => "🔂 Track",
@@ -35,25 +87,32 @@ impl LoopMode {
     }
 }
 
+#[derive(Debug)]
 pub struct GuildQueue {
     pub tracks: VecDeque<QueuedTrack>,
     pub current: Option<QueuedTrack>,
     pub history: VecDeque<QueuedTrack>,
     pub handle: Option<songbird::tracks::TrackHandle>,
     pub loop_mode: LoopMode,
-    pub volume: f32,
+    pub volume: Volume,
 }
 
-impl GuildQueue {
-    pub fn new() -> Self {
+impl Default for GuildQueue {
+    fn default() -> Self {
         Self {
             tracks: VecDeque::new(),
             current: None,
             history: VecDeque::with_capacity(50),
             handle: None,
             loop_mode: LoopMode::Off,
-            volume: 1.0,
+            volume: Volume::default(),
         }
+    }
+}
+
+impl GuildQueue {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn add_track(&mut self, track: QueuedTrack) {
@@ -64,13 +123,16 @@ impl GuildQueue {
         self.tracks.extend(tracks);
     }
 
-    pub fn remove_track(&mut self, index: usize) -> Result<QueuedTrack, BotError> {
-        if index == 0 || index > self.tracks.len() {
-            return Err(BotError::InvalidIndex(index));
+    pub fn remove_track(&mut self, index: QueueIndex) -> Result<QueuedTrack, BotError> {
+        let zero_based = index
+            .to_zero_based()
+            .ok_or(BotError::InvalidIndex(index.get()))?;
+        if zero_based >= self.tracks.len() {
+            return Err(BotError::InvalidIndex(index.get()));
         }
         self.tracks
-            .remove(index - 1)
-            .ok_or(BotError::InvalidIndex(index))
+            .remove(zero_based)
+            .ok_or(BotError::InvalidIndex(index.get()))
     }
 
     pub fn shuffle(&mut self) {
@@ -78,10 +140,10 @@ impl GuildQueue {
         self.tracks.make_contiguous().shuffle(&mut rng);
     }
 
-    pub fn set_volume(&mut self, vol: f32) {
-        self.volume = vol.clamp(0.0, 2.0);
+    pub fn set_volume(&mut self, vol: Volume) {
+        self.volume = vol;
         if let Some(handle) = &self.handle {
-            let _ = handle.set_volume(self.volume);
+            let _ = handle.set_volume(self.volume.as_f32());
         }
     }
 
@@ -157,11 +219,7 @@ impl GuildQueue {
             );
         }
 
-        let total_duration: f64 = self
-            .tracks
-            .iter()
-            .filter_map(|t| t.duration)
-            .sum();
+        let total_duration: f64 = self.tracks.iter().filter_map(|t| t.duration).sum();
 
         let _ = writeln!(
             output,
@@ -187,12 +245,99 @@ impl GuildQueue {
         self.current = None;
     }
 
-    pub fn toggle_loop(&mut self) -> &LoopMode {
+    pub fn toggle_loop(&mut self) -> LoopMode {
         self.loop_mode = self.loop_mode.next();
-        &self.loop_mode
+        self.loop_mode
     }
 
     pub fn is_empty(&self) -> bool {
         self.tracks.is_empty() && self.current.is_none()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio::source::AudioSource;
+    use poise::serenity_prelude as serenity;
+
+    fn sample_track(title: &str) -> QueuedTrack {
+        QueuedTrack::new(
+            title.to_string(),
+            Some(180.0),
+            serenity::UserId::new(1),
+            AudioSource::Youtube {
+                url: "https://youtube.com/watch?v=test".to_string(),
+            },
+        )
+    }
+
+    #[test]
+    fn test_loop_mode_cycle() {
+        assert_eq!(LoopMode::Off.next(), LoopMode::Track);
+        assert_eq!(LoopMode::Track.next(), LoopMode::Queue);
+        assert_eq!(LoopMode::Queue.next(), LoopMode::Off);
+    }
+
+    #[test]
+    fn test_queue_index_conversion() {
+        assert_eq!(QueueIndex::new(0).to_zero_based(), None);
+        assert_eq!(QueueIndex::new(1).to_zero_based(), Some(0));
+        assert_eq!(QueueIndex::new(5).to_zero_based(), Some(4));
+        assert_eq!(QueueIndex::new(42).get(), 42);
+    }
+
+    #[test]
+    fn test_volume_clamping() {
+        assert!((Volume::from_percent(0).as_f32() - 0.0).abs() < f32::EPSILON);
+        assert!((Volume::from_percent(100).as_f32() - 1.0).abs() < f32::EPSILON);
+        assert!((Volume::from_percent(200).as_f32() - 2.0).abs() < f32::EPSILON);
+        assert!((Volume::from_percent(300).as_f32() - 2.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_guild_queue_basic_operations() {
+        let mut queue = GuildQueue::new();
+        assert!(queue.is_empty());
+
+        let t1 = sample_track("Track 1");
+        let t2 = sample_track("Track 2");
+
+        queue.add_track(t1);
+        queue.add_track(t2);
+        assert_eq!(queue.tracks.len(), 2);
+        assert!(!queue.is_empty());
+
+        let Ok(removed) = queue.remove_track(QueueIndex::new(1)) else {
+            panic!("Expected track removal to succeed");
+        };
+        assert_eq!(removed.title, "Track 1");
+        assert_eq!(queue.tracks.len(), 1);
+
+        assert!(queue.remove_track(QueueIndex::new(0)).is_err());
+        assert!(queue.remove_track(QueueIndex::new(99)).is_err());
+
+        queue.clear();
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn test_guild_queue_skip_loop_modes() {
+        let mut queue = GuildQueue::new();
+        let t1 = sample_track("Track 1");
+        let t2 = sample_track("Track 2");
+
+        queue.add_track(t1.clone());
+        queue.add_track(t2);
+
+        queue.loop_mode = LoopMode::Off;
+        queue.current = queue.tracks.pop_front();
+        let next = queue.skip();
+        assert_eq!(next.map(|t| t.title), Some("Track 2".to_string()));
+
+        queue.loop_mode = LoopMode::Track;
+        queue.current = Some(t1);
+        let repeated = queue.skip();
+        assert_eq!(repeated.map(|t| t.title), Some("Track 1".to_string()));
     }
 }

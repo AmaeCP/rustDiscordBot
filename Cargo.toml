@@ -20,6 +20,15 @@ dashmap = "6"
 dotenvy = "0.15"
 thiserror = "2"
 rand = "0.8"
+anyhow = "1.0"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
 
 [profile.release]
 opt-level = 3
