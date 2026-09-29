@@ -1,110 +1,90 @@
-# Discord Music Bot (Rust)
+# Discord Music Bot
 
-Высокопроизводительный Discord музыкальный бот на Rust (**Serenity 0.12 + Poise 0.6 + Songbird 0.6** с поддержкой **Discord DAVE E2EE Voice**).
+**Languages:** English | [Русский](README.ru.md)
 
-## Возможности
+A Discord music bot written in Rust using Serenity, Poise, and Songbird.
 
-- Воспроизведение треков с YouTube по ссылке или поисковому запросу.
-- Поддержка YouTube плейлистов (мгновенный парсинг без предварительного скачивания).
-- Автоматическая очистка ссылок на радио-миксы и личные списки (`list=RD`, `list=LL`, `list=WL`).
-- Поддержка пачки ссылок через пробел в одной команде.
-- Воспроизведение локальных аудиофайлов с диска сервера (`.mp3`, `.flac`, `.wav`, `.ogg`, `.m4a`).
-- Воспроизведение аудиофайлов, прикрепленных прямо в чат Discord (`attachment`).
-- Потокобезопасная очередь треков (`VecDeque`) отдельно для каждого сервера.
-- Интерактивный прогресс-бар в реальном времени (`/nowplaying`).
-- Поддержка циклов воспроизведения (`/loop Off | Track | Queue`).
-- Перемешивание очереди (`/shuffle`).
-- Регулировка громкости от 1% до 200% (`/volume`).
-- Перемотка на любую позицию (`/seek mm:ss` или секунды).
-- Перезапуск текущего трека сначала (`/replay`) и возврат к предыдущему (`/previous`).
-- Поддержка паузы, возобновления, пропуска, удаления по номеру и очистки очереди.
+## Features
 
----
+- Play YouTube links, search queries, playlists, and multiple links in one request.
+- Play an audio attachment or a file available on the bot host.
+- Per-server queue with automatic progression when a track ends.
+- Repeat track, repeat queue, shuffle, volume control, seek, and playback history.
+- A public control panel with buttons for previous, pause/resume, skip, stop, clear, queue, repeat, shuffle, and volume.
+- Only one current panel per server. The panel follows control activity between text channels; older panels are disabled.
+- Recover after the bot is removed from voice: clear the interrupted track and queue, then wait for a new `/play`.
+- Leave voice automatically after 10 minutes with no current or queued tracks. `/leave` disconnects immediately.
+- While playing or waiting with a non-empty queue, the current voice channel has priority. During an empty idle wait, a new `/play` can move the bot to the caller's channel.
 
-## Список команд
+Queue and playback state are held in memory and are lost when the bot restarts.
 
-| Команда | Аргументы | Описание |
+## Commands
+
+| Command | Arguments | Description |
 |---|---|---|
-| `/play` | `query: <ссылка / запрос / пачка ссылок>` | Воспроизводит трек, плейлист или ищет на YouTube. Поддерживает несколько ссылок через пробел |
-| `/play_local` | `file: [вложение]`, `path: [путь на диске]` | Воспроизводит прикрепленный в Discord аудиофайл или файл с локального диска хоста |
-| `/nowplaying` | — | Показывает текущий трек, автора запроса, время и визуальный прогресс-бар |
-| `/queue` | `page: [номер страницы]` | Показывает постраничный список треков в очереди с общей длительностью |
-| `/skip` | — | Пропускает текущий трек и включает следующий из очереди |
-| `/pause` | — | Ставит текущий трек на паузу |
-| `/resume` | — | Снимает воспроизведение с паузы |
-| `/loop` | `mode: [Off / Track / Queue]` | Управляет режимом зацикливания (или переключает по кругу, если аргумент не указан) |
-| `/shuffle` | — | Случайно перемешивает треки в очереди |
-| `/volume` | `level: <1-200>` | Регулирует громкость воспроизведения бота в процентах |
-| `/seek` | `position: <mm:ss / секунды>` | Перематывает текущий трек на указанное время (например, `1:30` или `90`) |
-| `/replay` | — | Перезапускает текущий трек с самого начала (`0:00`) |
-| `/previous` | — | Включает предыдущий трек из истории воспроизведения |
-| `/remove` | `index: <номер>` | Удаляет трек из очереди по его порядковому номеру (1-based) |
-| `/clear` | — | Очищает список предстоящих треков в очереди, не прерывая текущий трек |
-| `/stop` | — | Полностью останавливает воспроизведение и очищает всю очередь |
-| `/leave` | — | Отключает бота от голосового канала |
+| `/play` | `query` | Play a YouTube URL, search query, playlist, or multiple URLs. |
+| `/play_local` | `file` or `path` | Play an attached audio file or a file on the bot host. A host path is not a path on the user's computer. |
+| `/nowplaying` | — | Show the current track and playback progress. |
+| `/queue` | `page` (optional) | Show the current track and a page of queued tracks. |
+| `/skip` | — | Skip the current track. |
+| `/previous` | — | Return to the previous track in playback history. |
+| `/pause`, `/resume` | — | Pause or resume playback. |
+| `/loop` | `mode`: `Off`, `Track`, or `Queue` (optional) | Set or cycle the repeat mode. |
+| `/shuffle` | — | Shuffle upcoming tracks. |
+| `/volume` | `level`: `0–200` | Set volume as a percentage. |
+| `/seek` | `position` | Seek by seconds or `mm:ss` (for example, `90` or `1:30`). |
+| `/replay` | — | Restart the current track. |
+| `/remove` | `index` | Remove a queued track by its 1-based position. |
+| `/clear` | — | Clear upcoming tracks without stopping the current track. |
+| `/stop` | — | Stop playback and clear the queue; the bot leaves after the idle timeout. |
+| `/leave` | — | Disconnect from voice immediately and clear playback state. |
 
----
+The bot registers slash commands. The command functions also declare Poise prefix support, but this project does not configure a message prefix, so use slash commands and the control panel.
 
-## Системные требования
+## Requirements
 
-- **Rust** (1.75+)
-- **FFmpeg** (должен быть доступен в `PATH`)
-- **yt-dlp** (должен быть доступен в `PATH`)
-- **libopus**
+- Rust and Cargo
+- `yt-dlp` and FFmpeg available in `PATH`
+- `libopus` and the platform's usual build tools
 
-### Установка зависимостей
+### macOS
 
-**macOS (Homebrew):**
 ```bash
-brew install ffmpeg yt-dlp
+brew install ffmpeg yt-dlp opus
 ```
 
-**Ubuntu / Debian:**
+### Ubuntu / Debian
+
 ```bash
-sudo apt update && sudo apt install -y ffmpeg libopus-dev build-essential pkg-config libssl-dev
-sudo wget https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -O /usr/local/bin/yt-dlp
-sudo chmod a+rx /usr/local/bin/yt-dlp
+sudo apt update
+sudo apt install -y build-essential pkg-config libssl-dev ffmpeg yt-dlp libopus-dev
 ```
 
----
+## Configure and run
 
-## Настройка
+1. Create a bot application in the [Discord Developer Portal](https://discord.com/developers/applications), add a bot, and copy its token.
+2. Create `.env` in the project root:
 
-1. Создайте файл `.env` в корне проекта:
-```env
-DISCORD_TOKEN=ваш_токен_бота
-```
+   ```env
+   DISCORD_TOKEN=your_bot_token
+   ```
 
-2. В **[Discord Developer Portal](https://discord.com/developers/applications)**:
-   - В разделе **Bot → Privileged Gateway Intents** включите:
-     - `Presence Intent`
-     - `Server Members Intent`
-     - `Message Content Intent`
-   - В разделе **OAuth2 → URL Generator**:
-     - Scopes: `bot`, `applications.commands`
-     - Bot Permissions: `Administrator` (или `Connect`, `Speak`, `Send Messages`)
-     - Добавьте бота на ваш сервер.
+3. In **Bot → Privileged Gateway Intents**, enable the intents requested by this bot: **Presence**, **Server Members**, and **Message Content**. The application currently requests all gateway intents.
+4. Invite the bot with the `bot` and `applications.commands` OAuth2 scopes. Grant the channel permissions it needs: View Channels, Send Messages, Embed Links, Connect, and Speak. Administrator permission is not required.
+5. Run locally or build a release binary:
 
----
+   ```bash
+   cargo run
+   # or
+   cargo build --release
+   ./target/release/discord-music-bot
+   ```
 
-## Запуск
+## Run with systemd
 
-### Локально (режим разработки)
-```bash
-cargo run
-```
+Adjust the paths and service user for your VPS. This example matches a deployment under `/root/rustDiscordBot`:
 
-### Сборка релизной версии
-```bash
-cargo build --release
-./target/release/discord-music-bot
-```
-
----
-
-## Автозапуск на Linux (Systemd)
-
-Создайте файл сервиса `/etc/systemd/system/discord-bot.service`:
+This mirrors the current VPS unit and runs as `root`. For a new production deployment, use a dedicated system user and grant it access only to the project directory.
 
 ```ini
 [Unit]
@@ -124,10 +104,22 @@ EnvironmentFile=/root/rustDiscordBot/.env
 WantedBy=multi-user.target
 ```
 
-Управление сервисом:
+Save it as `/etc/systemd/system/discord-bot.service`, then build and start the service:
+
 ```bash
+cd /root/rustDiscordBot
+cargo build --release
 sudo systemctl daemon-reload
-sudo systemctl enable discord-bot
-sudo systemctl start discord-bot
-sudo systemctl status discord-bot
+sudo systemctl enable --now discord-bot.service
+sudo systemctl status discord-bot.service
+```
+
+View logs with `sudo journalctl -u discord-bot.service -f`.
+
+## Checks
+
+```bash
+cargo fmt --check
+cargo test
+cargo clippy --all-targets -- -D warnings
 ```
